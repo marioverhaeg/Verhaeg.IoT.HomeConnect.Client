@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.IO;
 
-namespace Verhaeg.IoT.HomeConnect.Client
+namespace Verhaeg.IoT.HomeConnect.Client.Managers
 {
     public class AuthorizationManager : Processor.TaskManager
     {
@@ -163,7 +163,7 @@ namespace Verhaeg.IoT.HomeConnect.Client
             var token_values = new Dictionary<string, string>
                 {
                     { "grant_type", "refresh_token" },
-                    { "refresh_token", RetrieveTextFromFile(Path.AltDirectorySeparatorChar + "Refresh.txt")},
+                    { "refresh_token", RetrieveTextFromFile("Refresh.txt")},
                     { "client_secret", hc_configuration.client_secret }
                 };
             FormUrlEncodedContent content = new FormUrlEncodedContent(token_values);
@@ -178,8 +178,8 @@ namespace Verhaeg.IoT.HomeConnect.Client
         public bool GetTokenFromFile()
         {
             Log.Information("Trying to retrieve token from file...");
-            string access_token = RetrieveTextFromFile(Path.AltDirectorySeparatorChar + "Access.txt");
-            string refresh_token = RetrieveTextFromFile(Path.AltDirectorySeparatorChar + "Refresh.txt");
+            string access_token = RetrieveTextFromFile("Access.txt");
+            string refresh_token = RetrieveTextFromFile("Refresh.txt");
 
             if (access_token != "" && refresh_token != "")
             {
@@ -245,8 +245,8 @@ namespace Verhaeg.IoT.HomeConnect.Client
         private void WriteTokensToFile(string access, string refresh)
         {
             Log.Debug("Writing tokens to text file...");
-            WriteTextToFile(access, Path.AltDirectorySeparatorChar + "Access.txt");
-            WriteTextToFile(refresh, Path.AltDirectorySeparatorChar + "Refresh.txt");
+            WriteTextToFile(access, "Access.txt");
+            WriteTextToFile(refresh, "Refresh.txt");
         }
 
         private string RetrieveTextFromFile(string file)
@@ -322,7 +322,7 @@ namespace Verhaeg.IoT.HomeConnect.Client
             {
                 Log.Debug("Token not available, waiting to return HomeConnectClient to " + caller);
                 // Wait and block thread
-                await Task.Delay(2000);
+                await Task.Delay(5000);
             }
 
             Log.Debug("Token available, returning new HomeConnectClient to " + caller);
