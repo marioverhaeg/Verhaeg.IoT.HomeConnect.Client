@@ -46,14 +46,15 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         }
 
 
-        private AuthorizationManager(Uri uri, string authentication_uri, string token_uri, string client_id,
+        private AuthorizationManager(string uri, string authentication_uri, string token_uri, string client_id,
             string client_secret, string device_name, string ha_id) : base("AuthorizationManager_" + device_name)
         {
             hc_configuration = new Configuration.Connection(uri, authentication_uri, token_uri, client_id, client_secret,
                 device_name, ha_id);
+            hcRequest.Timeout = TimeSpan.FromSeconds(10);
         }
 
-        public static void Start(Uri uri, string authentication_uri, string token_uri, string client_id, 
+        public static void Start(string uri, string authentication_uri, string token_uri, string client_id, 
             string client_secret, string device_name, string ha_id)
         {
             lock (padlock)
@@ -69,26 +70,53 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         protected async override void Process()
         {
             token_available = false;
-
-            if (GetTokenFromFile() == false)
+            Device_Token dt = GetTokenFromFile();
+            if (dt == null || await TokensAreValid(dt) == false)
             {
-                Log.Debug("Could not read tokens from file, starting OAuth Device Authentication flow.");
+                Log.Debug("Could not read tokens from file, trying to retrieve tokens from HomeConnect...");
                 Device_Authentication da = await GetDeviceAuthentication();
-                GetTokenFromHTTP(da);
+                dt = await GetTokenFromHomeConnect(da);
+                Log.Debug("Tokens retrieved from HomeConnect.");
             }
-            else
-            {
-                Log.Debug("Tokens read from file, trying to validate tokens.");
-                if (await RetrieveHaId() == null)
+
+            if (dt != null)
+            {          
+                if (await TokensAreValid(dt))
                 {
-                    Log.Debug("The token that are stored in the files are not usable, starting OAuth Device Authentication flow.");
-                    Device_Authentication da = await GetDeviceAuthentication();
-                    GetTokenFromHTTP(da);
+                    WriteTokensToFile(dt.access_token, dt.refresh_token);
+                    token_available = true;
+                    StartTokenRefreshTimer();
                 }
                 else
                 {
-                    token_available = true;
+                    Log.Error("Something went wrong...");
                 }
+            }
+        }
+
+        private void StartTokenRefreshTimer()
+        {
+            Log.Debug("Used token refresh time: " + (token_refresh_time / 1000 / 60).ToString() + " minutes.");
+            tToken = new System.Timers.Timer(token_refresh_time);
+            tToken.Elapsed += T_Elapsed;
+            tToken.AutoReset = true;
+            tToken.Enabled = true;
+            tToken.Start();
+        }
+
+        private async Task<bool> TokensAreValid(Device_Token dt)
+        {
+            CreateHTTPClient(dt.access_token);
+            Log.Debug("Trying to validate tokens by retrieving HaId...");
+            if (await RetrieveHaId() == "")
+            {
+                Log.Debug("Could not validate tokens...");
+                return false;
+            }
+            else
+            {
+                Log.Debug("Tokens validated."); 
+                return true;
             }
         }
 
@@ -110,6 +138,8 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                 Log.Debug("Trying to deserialize response into object...");
                 Device_Authentication da = JsonConvert.DeserializeObject<Device_Authentication>(str);
                 Log.Debug("Response deserialized.");
+                Task t = new Task(() => GenerateAuthenticationError(da));
+                t.Start();
                 return da;
             }
             catch (Exception ex)
@@ -120,7 +150,14 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             }
         }
 
-        private async void GetTokenFromHTTP(Device_Authentication da)
+        private void GenerateAuthenticationError(Device_Authentication da)
+        {
+            Fields.Error er = new Fields.Error("Verhaeg.IoT.Slack.Error:HomeConnectAuthentication", DateTime.UtcNow, "Error",
+                        "Waiting for authentication on " + da.verification_uri_complete, "", "Verhaeg.IoT.HomeConnect.Client");
+            er.UpdateDigitalTwin();
+        }
+
+        private async Task<Device_Token> GetTokenFromHomeConnect(Device_Authentication da)
         {
             // Prepare HTTP POST request
             Log.Debug("Checking if access token is ready, preparing HTTP POST message...");
@@ -136,30 +173,26 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             FormUrlEncodedContent content = new FormUrlEncodedContent(token_values);
 
             // Get token from HTTP
-            while (await HTTP_POST_Get_Token(content) == null)
+            Device_Token dt = null;
+            while (dt == null)
             {
-                Log.Information("Trying to retrieve token from HTTP...");
-                token_available = false;
-                Log.Error("Could not retrieve access token. Retry in 30 seconds.");
-                await Task.Delay(30000);
+                Log.Information("Trying to retrieve device token from HomeConnect...");
+                dt = await GetDeviceToken(content);
+                if (dt == null)
+                {
+                    Log.Error("Could not retrieve access token. Retry in 60 seconds.");
+                    await Task.Delay(60000);
+                }
             }
-
-            StartTokenRefreshTimer();            
+            return dt;
         }
 
-        private void StartTokenRefreshTimer()
-        {
-            Log.Debug("Used token refresh time: " + (token_refresh_time / 1000 / 60).ToString() + " minutes.");
-            tToken = new System.Timers.Timer(token_refresh_time);
-            tToken.Elapsed += T_Elapsed;
-            tToken.AutoReset = true;
-            tToken.Enabled = true;
-            tToken.Start();
-        }
+        
 
         private async void T_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             Log.Information("Token about to expire, refresh token.");
+            token_available = false;
             var token_values = new Dictionary<string, string>
                 {
                     { "grant_type", "refresh_token" },
@@ -167,15 +200,30 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     { "client_secret", hc_configuration.client_secret }
                 };
             FormUrlEncodedContent content = new FormUrlEncodedContent(token_values);
-            token_available = false;
-            while(await HTTP_POST_Get_Token(content) == null)
+            int i = 0;
+            Device_Token dt = null;
+            while (dt == null && i < 10)
             {
-                Log.Error("Could not retrieve access token. Retry in 30 seconds.");
-                await Task.Delay(30000);
+                dt = await GetDeviceToken(content);
+                if (dt == null)
+                {
+                    Log.Error("Could not retrieve access token. Retry in 60 seconds.");
+                    i++;
+                    await Task.Delay(60000);
+                }
+            }
+
+            WriteTokensToFile(dt.access_token, dt.refresh_token);
+            CreateHTTPClient(dt.access_token);
+            token_available = true;
+
+            if (i == 10)
+            {
+                Log.Error("Could not refresh token, restarting authentication flow.");
             }
         }
 
-        public bool GetTokenFromFile()
+        public Device_Token GetTokenFromFile()
         {
             Log.Information("Trying to retrieve token from file...");
             string access_token = RetrieveTextFromFile("Access.txt");
@@ -191,31 +239,29 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                 dt.id_token = "";
                 dt.scope = "CookProcessor-Monitor Dryer-Settings Washer-Control Dryer-Monitor Settings IdentifyAppliance CleaningRobot Washer-Settings CoffeeMaker Washer CookProcessor-Settings Hob-Settings Oven-Monitor Hood-Control WasherDryer-Monitor Oven-Settings CoffeeMaker-Monitor Monitor Hob-Monitor WasherDryer-Control Dishwasher-Control Refrigerator-Control Dishwasher Dryer-Control CleaningRobot-Control WineCooler Freezer-Monitor WasherDryer Refrigerator-Monitor CookProcessor Freezer Freezer-Settings WineCooler-Control WineCooler-Settings Dishwasher-Settings Hood Dryer FridgeFreezer-Monitor CleaningRobot-Settings Refrigerator Refrigerator-Settings Dishwasher-Monitor CoffeeMaker-Settings FridgeFreezer-Settings CleaningRobot-Monitor WineCooler-Monitor Freezer-Control CoffeeMaker-Control Washer-Monitor Hood-Monitor Hood-Settings FridgeFreezer-Control CookProcessor-Control WasherDryer-Settings";
                 dt.token_type = "Bearer";
-                CreateHTTPClient(access_token);
-                StartTokenRefreshTimer();
-                return true;
+                return dt;
             }
             else
             {
-                return false;
+                return null;
             }
         }
 
         private void CreateHTTPClient(string access_token)
         {
-            Log.Debug("Creating API client...");
-            hcRequest.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", access_token);
+            Log.Debug("Creating HttpClient client...");
+            hcRequest.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", access_token);            
             hcc = new HomeConnectClient(hcRequest);
             hcc.BaseUrl = hc_configuration.uri.ToString();
-            Log.Information("Token refreshed.");
+            Log.Information("HttpClient created.");
         }
 
-        public async Task<Device_Token> HTTP_POST_Get_Token(FormUrlEncodedContent content)
+        public async Task<Device_Token> GetDeviceToken(FormUrlEncodedContent content)
         {
             try
             {
                 HttpResponseMessage response = await hcToken.PostAsync(hc_configuration.token_uri, content);
-                string str = await response.Content.ReadAsStringAsync();
+                string str = await response.Content.ReadAsStringAsync();                
                 Log.Debug("Trying to deserialize response into object...");
                 if (str.Contains("access_token"))
                 {
@@ -223,14 +269,18 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     
                     Log.Debug("Access token: " + dt.access_token);
                     Log.Debug("Refresh token: " + dt.refresh_token); 
-                    WriteTokensToFile(dt.access_token, dt.refresh_token);
-                    CreateHTTPClient(dt.access_token);
-                    token_available = true;
                     return dt;
+                }
+                else if (str.Contains("invalid_grant"))
+                {
+                    Log.Error("Invalid refresh token.");
+                    Log.Debug("Received message: " + str);
+                    return null;
                 }
                 else
                 {
-                    Log.Error("Received message: " + str);
+                    Log.Error("Could not process HttpResponseMessage.");
+                    Log.Debug("Received message: " + str);
                     return null;
                 }
             }
@@ -291,29 +341,63 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
 
         private async Task<string> RetrieveHaId()
         {
+            bool retry_get = true;
+            string return_value = "";
 
-            try
+            while (retry_get)
             {
-                ArrayOfHomeAppliances appliances = await hcc.HomeappliancesGetAsync();
-                string return_value = "";
-
-                foreach (Homeappliances ha in appliances.Data.Homeappliances)
+                Log.Debug("Trying to retrieve HaId from HomeConnect...");
+                try
                 {
-                    if (ha.Name == hc_configuration.device_name)
+                    ArrayOfHomeAppliances appliances = await hcc.HomeappliancesGetAsync();
+                    foreach (Homeappliances ha in appliances.Data.Homeappliances)
                     {
-                        Log.Debug("Found device in acoount: " + ha.Name);
-                        return_value = ha.HaId;
+                        if (ha.Name == hc_configuration.device_name)
+                        {
+                            Log.Debug("Found device in account: " + ha.Name);
+                            return_value = ha.HaId;
+                            retry_get = false;
+                        }
+                        else
+                        {
+                            Log.Debug("Device in configuration does not match with device connect to HomeConnect " + ha.Name);
+                        }
+                    }
+
+                    return return_value;
+                }
+                catch (ApiException ex)
+                {
+                    if (ex.StatusCode == 429)
+                    {
+                        Log.Error(ex.Message);
+                        string[] h = (string[])ex.Headers["Retry-After"];
+                        int retry = int.Parse(h[0]);
+                        Log.Debug("Waiting for " + retry.ToString() + " seconds.");
+                        System.Threading.Thread.Sleep(retry * 1000);
+                    }
+                    else
+                    {
+                        Log.Error("Could not retrieve HaId.");
+                        Log.Debug(ex.ToString());
+                        if (ex.ToString().ToLower().Contains("unauthorized"))
+                        {
+                            Fields.Error er = new Fields.Error("Verhaeg.IoT.Error:HomeConnectAuthentication", DateTime.UtcNow, "Exception",
+                                "HomeConnect authentication failure", ex.ToString(), "Verhaeg.IoT.HomeConnect.Client");
+                            er.UpdateDigitalTwin();
+                        }
+                        return_value = "";
+                        retry_get = false;
                     }
                 }
+                catch (Exception ex)
+                {
+                    Log.Error("Unknown exception.");
+                    Log.Debug(ex.ToString());
+                }
+            }
 
-                return return_value;
-            }
-            catch (Exception ex)
-            {
-                Log.Error("Could not retrieve HaId.");
-                Log.Debug(ex.ToString());
-                return null;
-            }
+            return return_value;
         }
 
         public async Task<HomeConnectClient> GetHomeConnectClient([CallerMemberName] string caller = "")

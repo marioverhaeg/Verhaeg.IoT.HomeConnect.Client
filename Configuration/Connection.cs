@@ -8,7 +8,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Configuration
 {
     public class Connection
     {
-        public Uri uri { get; set; }
+        public string uri { get; set; }
         public string authentication_uri { get; set; }
         public string token_uri { get; set; }
         public string client_id { get; set; }
@@ -16,7 +16,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Configuration
         public string device_name { get; set; }
         public string ha_id { get; set; }
 
-        public Connection(Uri uri, string authentication_uri, string token_uri, string client_id,
+        public Connection(string uri, string authentication_uri, string token_uri, string client_id,
             string client_secret, string device_name, string ha_id)
         {
             this.uri = uri;
