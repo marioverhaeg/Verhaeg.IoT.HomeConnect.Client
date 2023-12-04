@@ -47,22 +47,21 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
 
 
         private AuthorizationManager(string uri, string authentication_uri, string token_uri, string client_id,
-            string client_secret, string device_name, string ha_id) : base("AuthorizationManager_" + device_name)
+            string client_secret) : base("AuthorizationManager")
         {
-            hc_configuration = new Configuration.Connection(uri, authentication_uri, token_uri, client_id, client_secret,
-                device_name, ha_id);
+            hc_configuration = new Configuration.Connection(uri, authentication_uri, token_uri, client_id, client_secret);
             hcRequest.Timeout = TimeSpan.FromSeconds(10);
         }
 
         public static void Start(string uri, string authentication_uri, string token_uri, string client_id, 
-            string client_secret, string device_name, string ha_id)
+            string client_secret)
         {
             lock (padlock)
             {
                 if (_instance == null)
                 {
                     _instance = new AuthorizationManager(uri, authentication_uri, token_uri, client_id,
-                        client_secret, device_name, ha_id);
+                        client_secret);
                 }
             }
         }
@@ -145,7 +144,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             catch (Exception ex)
             {
                 Log.Error("Could not connect to configured URI.");
-                Log.Debug(ex.ToString());
+                Log.Error(ex.ToString());
                 return null;
             }
         }
@@ -219,7 +218,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
 
             if (i == 10)
             {
-                Log.Error("Could not refresh token, restarting authentication flow.");
+                Log.Error("Could not refresh token, restarting authentication flow.");                
             }
         }
 
@@ -277,6 +276,12 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     Log.Debug("Received message: " + str);
                     return null;
                 }
+                else if (str.Contains("expired_token"))
+                {
+                    Device_Authentication da = await GetDeviceAuthentication();
+                    Device_Token dt = await GetTokenFromHomeConnect(da);
+                    return dt;
+                }
                 else
                 {
                     Log.Error("Could not process HttpResponseMessage.");
@@ -287,7 +292,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             catch (Exception ex)
             {
                 Log.Error("Could not connect to configured URI.");
-                Log.Debug(ex.ToString());
+                Log.Error(ex.ToString());
                 return null;
             }
         }
@@ -352,16 +357,12 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     ArrayOfHomeAppliances appliances = await hcc.HomeappliancesGetAsync();
                     foreach (Homeappliances ha in appliances.Data.Homeappliances)
                     {
-                        if (ha.Name == hc_configuration.device_name)
-                        {
-                            Log.Debug("Found device in account: " + ha.Name);
-                            return_value = ha.HaId;
-                            retry_get = false;
-                        }
-                        else
-                        {
-                            Log.Debug("Device in configuration does not match with device connect to HomeConnect " + ha.Name);
-                        }
+
+                        Log.Debug("Found device in account: " + ha.Name);
+                        return_value = ha.HaId;
+                        retry_get = false;
+                        Log.Debug("Returned first HaId found: " + ha.HaId);
+                        break;
                     }
 
                     return return_value;
@@ -374,26 +375,43 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                         string[] h = (string[])ex.Headers["Retry-After"];
                         int retry = int.Parse(h[0]);
                         Log.Debug("Waiting for " + retry.ToString() + " seconds.");
-                        System.Threading.Thread.Sleep(retry * 1000);
+
+                        Fields.Error er = new Fields.Error("Verhaeg.IoT.Slack.Error:HomeConnectAuthentication", DateTime.UtcNow, "Exception",
+                                "The number of requests for a specific endpoint exceed the quota of the client. Waiting for " + retry.ToString() + " seconds.", "", "Verhaeg.IoT.HomeConnect.Client");
+                        er.UpdateDigitalTwin();
+
+                        if (retry > 3600)
+                        {
+                            System.Threading.Thread.Sleep(3600 * 1000);
+                        }
+                        else
+                        {
+                            System.Threading.Thread.Sleep(retry * 1000);
+                        }
+                        
                     }
                     else
                     {
                         Log.Error("Could not retrieve HaId.");
-                        Log.Debug(ex.ToString());
+                        Log.Error(ex.ToString());
                         if (ex.ToString().ToLower().Contains("unauthorized"))
                         {
-                            Fields.Error er = new Fields.Error("Verhaeg.IoT.Error:HomeConnectAuthentication", DateTime.UtcNow, "Exception",
+                            Fields.Error er = new Fields.Error("Verhaeg.IoT.Slack.Error:HomeConnectAuthentication", DateTime.UtcNow, "Exception",
                                 "HomeConnect authentication failure", ex.ToString(), "Verhaeg.IoT.HomeConnect.Client");
                             er.UpdateDigitalTwin();
                         }
                         return_value = "";
                         retry_get = false;
                     }
+                    Log.Debug("Waiting 30 seconds before retrying...");
+                    System.Threading.Thread.Sleep(30000);
                 }
                 catch (Exception ex)
                 {
                     Log.Error("Unknown exception.");
-                    Log.Debug(ex.ToString());
+                    Log.Error(ex.ToString());
+                    Log.Debug("Waiting 30 seconds before retrying...");
+                    System.Threading.Thread.Sleep(30000);
                 }
             }
 
