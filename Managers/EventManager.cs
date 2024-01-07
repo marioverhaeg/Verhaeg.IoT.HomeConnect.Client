@@ -26,6 +26,9 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         // Event
         public event EventHandler<Dictionary<string, string>> applianceEvent;
 
+        // Task
+        private Task get_events;
+
         public EventManager(string uri, string device_name, string haId) : base("EventManager_" + device_name)
         {
             this.haId = haId;
@@ -38,7 +41,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
 
         protected async override void Process()
         {
-            while (!cts.IsCancellationRequested && _running == false)
+            while (!cts.IsCancellationRequested)
             {
                 try
                 {
@@ -128,22 +131,21 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                                 Log.Information("Received data from device, generating event.");
                                 applianceEvent(this, dMessage);
                             }
-
-                            // Keep alive message, restart timer.
-                            Log.Debug("KEEP-ALIVE received, restarting timer...");
-                            try
-                            {
-                                ResetKeepAliveTimer();
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Error("Could not restart timer.");
-                                Log.Error(ex.ToString());
-                                break;
-                            }
-
                             Log.Debug("Clearing dictionary...");
                             dMessage = null;
+                        }
+
+                        // Keep alive message, restart timer.
+                        Log.Debug("KEEP-ALIVE received, restarting timer...");
+                        try
+                        {
+                            ResetKeepAliveTimer();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error("Could not restart timer.");
+                            Log.Error(ex.ToString());
+                            break;
                         }
                     }
                 }
@@ -191,8 +193,6 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             Log.Debug("KEEP-ALIVE timer expired, stopping event retrieval task.");
             RestartProcess();
             CancellationToken ct = cts.Token;
-            //Log.Debug("Starting brand new process.");
-            //t = Task.Factory.StartNew(() => Process(), ct);
         }
 
         private void RestartProcess()
@@ -202,12 +202,12 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             Thread.Sleep(5000);
             tKeepAlive.Stop();
 
-            while (_running == true)
-            {
-                Log.Debug("GetEvents still running, cancelling again and waiting 5 seconds...");
-                cts.Cancel();
-                Thread.Sleep(5000);
-            }
+            //while (_running == true)
+            //{
+            //    Log.Debug("GetEvents still running, cancelling again and waiting 5 seconds...");
+            //    cts.Cancel();
+            //    Log.Debug("Cancellation requested = " + cts.IsCancellationRequested.ToString());
+            //}
             Log.Debug("GetEvents stopped running.");
 
             Log.Debug("Checking if task is canceled, completed, or faulted.");
