@@ -39,8 +39,9 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             tKeepAlive = new System.Timers.Timer();
         }
 
-        protected async override void Process()
+        protected override void Process()
         {
+            Log.Debug("=============== Thread opened ===============");
             while (!cts.IsCancellationRequested)
             {
                 try
@@ -48,10 +49,10 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     // Start reading events
                     _running = true;
                     Log.Debug("Start reading events.");
-                    await GetEvents();
+                    GetEvents();
                     Log.Debug("GetEvents stopped, waiting 5 seconds to restart.");
                     _running = false;
-                    await Task.Delay(5000);
+                    System.Threading.Thread.Sleep(5000);
                 }
                 catch (Exception ex)
                 {
@@ -59,14 +60,14 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     Log.Error(ex.ToString());
                     Log.Debug("Restarting event retrieval after 60 seconds pause...");
                     _running = false;
-                    await Task.Delay(60000);
+                    System.Threading.Thread.Sleep(60000);
                 }
             }
             Log.Debug("Cancellation requested.");
             _running = false;
         }
 
-        private async Task GetEvents()
+        private void GetEvents()
         {
             string url = uri + "homeappliances/" + haId + "/events";
             Log.Debug("Trying to retrieve events from " + @url);
@@ -74,7 +75,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             {
                 // Wait for authentication to complete
                 Log.Information("Waiting for authentication to complete...");
-                hc = await AuthorizationManager.Instance().GetHttpClient();
+                hc = AuthorizationManager.Instance().GetHttpClient().Result;
                 Log.Information("Authentication complete.");
 
                 // Create event
@@ -82,13 +83,13 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
 
                 Dictionary<string, string> dMessage = null;
                 Log.Debug("Connecting to " + url + " using StreamReader...");
-                using (StreamReader streamReader = new StreamReader(await hc.GetStreamAsync(url)))
+                using (StreamReader streamReader = new StreamReader(hc.GetStreamAsync(url).Result))
                 { 
                     Log.Debug("Waiting for end of stream...");
                     while (!streamReader.EndOfStream && !cts.IsCancellationRequested && _running)
                     {
                         Log.Debug("Waiting for message...");
-                        string message = await streamReader.ReadLineAsync();
+                        string message = streamReader.ReadLineAsync().Result;
                         Log.Debug($"Received message: {message}");
 
                         if (dMessage == null)
@@ -103,9 +104,8 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                         }
                         else if (message.StartsWith("event:"))
                         {
-
                             dMessage.Add("event", message);
-                        }
+                        } 
                         else if (message.StartsWith("id:"))
                         {
                             dMessage.Add("id", message);
@@ -225,6 +225,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             cts = new CancellationTokenSource();
             ct = cts.Token;
             t = Task.Factory.StartNew(() => Process(), ct);
+            Log.Debug("=============== Thread closed ===============");
         }
     }
 }
