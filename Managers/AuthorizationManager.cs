@@ -248,6 +248,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
 
         private void CreateHTTPClient(string access_token)
         {
+            System.Threading.Thread.Sleep(2000);
             Log.Debug("Creating HttpClient client...");
             hcRequest.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", access_token);            
             hcc = new HomeConnectClient(hcRequest);
