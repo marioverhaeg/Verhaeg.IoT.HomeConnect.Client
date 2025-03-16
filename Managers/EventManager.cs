@@ -191,6 +191,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         {
             // Restart connection thread
             Log.Debug("KEEP-ALIVE timer expired, stopping event retrieval task.");
+            cts.Cancel();
             RestartProcess();
             CancellationToken ct = cts.Token;
         }
@@ -209,15 +210,15 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             //    Log.Debug("Cancellation requested = " + cts.IsCancellationRequested.ToString());
             //}
             Log.Debug("GetEvents stopped running.");
-
             Log.Debug("Checking if task is canceled, completed, or faulted.");
             Log.Debug("Task status: " + t.Status.ToString());
 
-            while (t.Status != TaskStatus.RanToCompletion)
+            while (t.Status.ToString() != "RanToCompletion" || t.Status.ToString() != "Cancelled" || t.Status.ToString() != "Faulted")
             {
                 cts.Cancel();
                 hc.CancelPendingRequests();
                 Log.Debug("Waiting 5 seconds for task to be canceled, completed, or faulted.");
+                Log.Debug("Task status: " + t.Status.ToString());
                 Thread.Sleep(5000);
             }
 
