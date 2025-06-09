@@ -42,7 +42,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         protected override void Process()
         {
             Log.Debug("=============== Thread opened ===============");
-            while (!cts.IsCancellationRequested)
+            while (!ct.IsCancellationRequested)
             {
                 try
                 {
@@ -178,7 +178,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         private void ResetKeepAliveTimer()
         {
             tKeepAlive.Stop();
-            tKeepAlive = new System.Timers.Timer(240000);
+            tKeepAlive = new System.Timers.Timer(60000);
             tKeepAlive.Elapsed += TKeepAlive_Elapsed;
             tKeepAlive.AutoReset = false;
             tKeepAlive.Start();
@@ -190,35 +190,35 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         private void TKeepAlive_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             // Restart connection thread
-            Log.Debug("KEEP-ALIVE timer expired, stopping event retrieval task.");
-            cts.Cancel();
+            Log.Error("KEEP-ALIVE timer expired, stopping event retrieval task.");
+            Log.Debug("Trying to restart processes...");
             RestartProcess();
-            CancellationToken ct = cts.Token;
         }
 
         private void RestartProcess()
         {
             cts.Cancel();
+            Log.Debug("Cancellation requested = " + cts.IsCancellationRequested.ToString());
             hc.CancelPendingRequests();
-            Thread.Sleep(5000);
             tKeepAlive.Stop();
-
-            //while (_running == true)
-            //{
-            //    Log.Debug("GetEvents still running, cancelling again and waiting 5 seconds...");
-            //    cts.Cancel();
-            //    Log.Debug("Cancellation requested = " + cts.IsCancellationRequested.ToString());
-            //}
+            Thread.Sleep(5000);
+            
             Log.Debug("GetEvents stopped running.");
             Log.Debug("Checking if task is canceled, completed, or faulted.");
             Log.Debug("Task status: " + t.Status.ToString());
 
-            while (t.Status.ToString() != "RanToCompletion" || t.Status.ToString() != "Cancelled" || t.Status.ToString() != "Faulted")
+            while (t.Status.ToString() != "RanToCompletion" && t.Status.ToString() != "Cancelled" && t.Status.ToString() != "Faulted")
             {
                 cts.Cancel();
+                Log.Debug("Cancellation requested = " + cts.IsCancellationRequested.ToString());
+                if (cts.IsCancellationRequested)
+                {
+                    ct.ThrowIfCancellationRequested();
+                }
                 hc.CancelPendingRequests();
                 Log.Debug("Waiting 5 seconds for task to be canceled, completed, or faulted.");
                 Log.Debug("Task status: " + t.Status.ToString());
+               
                 Thread.Sleep(5000);
             }
 
