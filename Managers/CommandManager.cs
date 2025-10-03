@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -71,6 +72,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             {
                 if (p.Key == program_name)
                 {
+                    Log.Debug("Found program " + p.Key + " in list of available programs.");
                     return_value = true;
                     break;
                 }
