@@ -136,8 +136,16 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             }
             catch (ApiException ex)
             {
-                Log.Error("Could not start program on haId " + haId);
-                Log.Error(ex.ToString());
+                Log.Information("Could not start program on haId " + haId);
+                if (ex.ToString().Contains("WrongOperationStateError"))
+                {
+                    Log.Debug(ex.ToString());
+                }
+                else
+                {
+                    Log.Error(ex.ToString());
+                }
+                    
             }
             catch(Exception ex)
             {

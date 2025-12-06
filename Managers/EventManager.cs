@@ -50,19 +50,19 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
             Log.Debug("=============== Thread opened ===============");
             ctsGetEvents = new CancellationTokenSource();
             ctGetEvents = cts.Token;
-            while (!ctsGetEvents.IsCancellationRequested)
+            while (!cts.IsCancellationRequested)
             {
                 try
                 {
                     // Start reading events
-                    _running = true;
-                    event_iterations = 0;
+                    _running = true;                    
                     Log.Debug("Start reading events.");
                     ctsGetEvents = new CancellationTokenSource();
                     ctGetEvents = cts.Token;
                     GetEvents();
-                    Log.Debug("GetEvents stopped.");
+                    Log.Debug("GetEvents stopped. Restarting event retrieval after 60 seconds pause...");
                     _running = false;
+                    System.Threading.Thread.Sleep(60000);
                 }
                 catch (Exception ex)
                 {
@@ -81,6 +81,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         {
             string url = uri + "homeappliances/" + haId + "/events";
             Log.Debug("Trying to retrieve events from " + @url);
+            event_iterations = 0;
             try
             {
                 // Wait for authentication to complete
@@ -98,8 +99,13 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                     Log.Debug("Waiting for end of stream...");
                     while (!streamReader.EndOfStream && !ctsGetEvents.IsCancellationRequested && _running && event_iterations < 1000)
                     {
+                        if (tKeepAlive.Enabled == false)
+                        {
+                            Log.Error("KeepAlive timer is not running, resetting timer...");
+                            ResetKeepAliveTimer();
+                        }
                         Log.Debug("Waiting for message...");
-                        string message = streamReader.ReadLineAsync().Result;
+                        string message = streamReader.ReadLine();
                         Log.Debug($"Received message: {message}");
 
                         if (dMessage == null)
@@ -141,7 +147,8 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                                 Log.Information("Received data from device, generating event.");
                                 applianceEvent(this, dMessage);
                             }
-                            Log.Debug("Clearing dictionary...");
+                            Log.Debug("Clearing dictionary, restarting timer...");
+                            ResetKeepAliveTimer();
                             dMessage = null;
                         }
 
@@ -162,14 +169,11 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
                         }
                         Log.Debug("Closing event iteration " + event_iterations);
                         event_iterations++;
-
                     }
-                    
+                    Log.Debug("EndOfStream passed.");
+                    Log.Debug("Stopping timer.");
+                    tKeepAlive.Stop();
                 }
-
-                Log.Debug("EndOfStream passed.");
-                Log.Debug("Stopping timer.");
-                tKeepAlive.Stop();
             }
             catch (HttpRequestException ex)
             {
@@ -200,7 +204,7 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         private void ResetKeepAliveTimer()
         {
             tKeepAlive.Stop();
-            tKeepAlive = new System.Timers.Timer(90000);
+            tKeepAlive = new System.Timers.Timer(30000);
             tKeepAlive.Elapsed += TKeepAlive_Elapsed;
             tKeepAlive.AutoReset = false;
             tKeepAlive.Start();
@@ -212,42 +216,53 @@ namespace Verhaeg.IoT.HomeConnect.Client.Managers
         private void TKeepAlive_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             // Restart connection thread
-            Log.Error("KEEP-ALIVE timer EXPIRED, stopping event retrieval task.");
-            Log.Debug("Trying to restart processes...");
+            Log.Error("KEEP-ALIVE timer EXPIRED, stopping event retrieval task, trying to restart processes...");
             RestartProcess();
         }
 
         private void RestartProcess()
         {
-            ctsGetEvents.Cancel();
-            Log.Debug("Cancellation requested = " + ctsGetEvents.IsCancellationRequested.ToString());
-            hc.CancelPendingRequests();
-            tKeepAlive.Stop();
-            Thread.Sleep(5000);
-            
-            Log.Debug("GetEvents stopped running.");
-            Log.Debug("Checking if task is canceled, completed, or faulted.");
-            Log.Debug("Task status: " + tGetEvents.Status.ToString());
-
-            while (tGetEvents.Status.ToString() != "RanToCompletion" && tGetEvents.Status.ToString() != "Cancelled" && tGetEvents.Status.ToString() != "Faulted")
+            try
             {
                 ctsGetEvents.Cancel();
                 Log.Debug("Cancellation requested = " + ctsGetEvents.IsCancellationRequested.ToString());
-                if (ctsGetEvents.IsCancellationRequested)
-                {
-                    Log.Debug("ThrowIfCancellationRequested");
-                    ctGetEvents.ThrowIfCancellationRequested();
-                }
-                Log.Debug("Waiting 5 seconds for task to be canceled, completed, or faulted.");
-                Log.Debug("Task status: " + tGetEvents.Status.ToString());               
+                hc.CancelPendingRequests();
+                tKeepAlive.Stop();
                 Thread.Sleep(5000);
-            }
 
-            Log.Information("Restarting Process with new Task.");
-            ctsGetEvents = new CancellationTokenSource();
-            ctGetEvents = cts.Token;
-            tGetEvents = Task.Factory.StartNew(() => GetEvents(), ctGetEvents);
-            Log.Debug("=============== Thread closed ===============");
+                Log.Debug("GetEvents stopped running, checking if task is canceled, completed, or faulted");
+                if (tGetEvents != null)
+                {
+                    Log.Debug("Task status: " + tGetEvents.Status.ToString());
+                    while (tGetEvents.Status.ToString() != "RanToCompletion" && tGetEvents.Status.ToString() != "Cancelled" && tGetEvents.Status.ToString() != "Faulted")
+                    {
+                        ctsGetEvents.Cancel();
+                        Log.Debug("Cancellation requested = " + ctsGetEvents.IsCancellationRequested.ToString());
+                        if (ctsGetEvents.IsCancellationRequested)
+                        {
+                            Log.Debug("ThrowIfCancellationRequested");
+                            ctGetEvents.ThrowIfCancellationRequested();
+                        }
+                        Log.Debug("Waiting 5 seconds for task to be canceled, completed, or faulted.");
+                        Log.Debug("Task status: " + tGetEvents.Status.ToString());
+                        Thread.Sleep(5000);
+                    }
+                }
+                else
+                {
+                    Log.Debug("Task status is NULL.");
+                }
+                Log.Information("Restarting Process with new Task.");
+                ctsGetEvents = new CancellationTokenSource();
+                ctGetEvents = cts.Token;
+                tGetEvents = Task.Factory.StartNew(() => GetEvents(), ctGetEvents);
+                Log.Debug("=============== Thread closed ===============");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Exception in RestartProcess...");
+                Log.Error(ex.ToString());
+            }
         }
     }
 }
